@@ -1,9 +1,12 @@
 package server
 
 import (
+	"io/ioutil"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
+	"strings"
 
 	duoapi "github.com/duosecurity/duo_api_golang"
 	"github.com/fasthttp/router"
@@ -138,6 +141,23 @@ func StartServer(configuration schema.Configuration, providers middlewares.Provi
 	listener, err := net.Listen("tcp", addrPattern)
 	if err != nil {
 		logging.Logger().Fatalf("Error initializing listener: %s", err)
+	}
+
+	if configuration.AuthenticationBackend.File != nil && configuration.AuthenticationBackend.File.Password.Algorithm == "argon2id" && runtime.GOOS == "linux" {
+		f, err := ioutil.ReadFile("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+		if err != nil {
+			logging.Logger().Fatalf("Error reading hosts memory limit: %s", err)
+		}
+
+		m, _ := strconv.Atoi(strings.TrimSuffix(string(f), "\n"))
+		hostMem := float64(m) / 1024 / 1024 / 1024
+		argonMem := float64(configuration.AuthenticationBackend.File.Password.Memory) / 1024
+
+		if hostMem/argonMem <= 2 {
+			logging.Logger().Warnf("Authelia's password hashing memory parameter is set to: %gGB this is %g%% of the available memory: %gGB", argonMem, argonMem/hostMem*100, hostMem)
+			logging.Logger().Warn("Please read https://www.authelia.com/docs/configuration/authentication/file.html#memory and tune your deployment")
+			os.Exit(1)
+		}
 	}
 
 	if configuration.TLSCert != "" && configuration.TLSKey != "" {
